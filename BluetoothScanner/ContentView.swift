@@ -6,78 +6,95 @@
 //
 
 import SwiftUI
-import CoreBluetooth
+import CoreLocation
+import ExternalAccessory
 
-struct ContentView: View {
-    @StateObject private var scanner = BluetoothScanner()
-    @StateObject private var viewModel: BluetoothViewModel
-    
-    init() {
-        let scanner = BluetoothScanner()
-        _scanner = StateObject(wrappedValue: scanner)
-        _viewModel = StateObject(wrappedValue: BluetoothViewModel(scanner: scanner))
+class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
+    private let locationManager = CLLocationManager()
+    @Published var lastLocation: CLLocation?
+
+    override init() {
+        super.init()
+        locationManager.delegate = self
+        locationManager.requestWhenInUseAuthorization()
+        locationManager.startUpdatingLocation()
     }
 
-    var body: some View {
-        NavigationView {
-            VStack {
-                Button(action: {
-                    viewModel.restartScan()
-                }) {
-                    Label("Restart Scan", systemImage: "arrow.clockwise")
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let location = locations.last else { return }
+        print("Received location: \(location.coordinate.latitude), \(location.coordinate.longitude), acc: \((location.horizontalAccuracy))")
+        lastLocation = location
+
+        // iOS 15+ only
+        if #available(iOS 15.0, *) {
+            if let sourceInfo = location.sourceInformation {
+                if sourceInfo.isSimulatedBySoftware {
+                    print("Location is simulated (mock location)")
+                } else if sourceInfo.isProducedByAccessory {
+                    print("Location is from EXTERNAL GNSS (e.g., Reach RX)")
+                } else {
+                    print("Location is from INTERNAL GNSS")
                 }
-                .padding()
-                List(scanner.scannedPeripherals) { device in
-                    NavigationLink(destination: DeviceServicesView(peripheral: device.peripheral, services: viewModel.connectedPeripheral?.identifier == device.peripheral.identifier ? viewModel.discoveredServices : [])) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(device.name)
-                                .font(.headline)
-                            Text("UUID: \(device.peripheral.identifier.uuidString)")
-                                .font(.caption)
-                                .foregroundColor(.gray)
-                            Text("RSSI: \(device.rssi) dBm")
-                                .font(.caption)
-                                .foregroundColor(.blue)
-                            if let manufacturerData = device.advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data {
-                                Text("Manufacturer Data: \(manufacturerData.map { String(format: "%02x", $0) }.joined())")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
-                            if let services = device.advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID] {
-                                Text("Services: \(services.map(\.uuidString).joined(separator: ", "))")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                    .onTapGesture {
-                        print("Tapped on \(device.name ?? "Device")")
-                        viewModel.connect(to: device.peripheral)
-                    }
-                }
-                .navigationTitle("Bluetooth Devices")
+            } else {
+                print("No source information available (likely internal GNSS)")
             }
+        } else {
+            print("iOS version too old for sourceInformation; cannot determine source.")
         }
     }
 }
 
-struct DeviceServicesView: View {
-    let peripheral: CBPeripheral
-    let services: [CBService]
-    
+struct ContentView: View {
+    @StateObject var nmeaReader = NMEAStreamReader()
     var body: some View {
-        VStack(alignment: .leading) {
-            Text("Services for \(peripheral.name ?? "Device")")
-                .font(.title2)
-                .padding(.bottom)
-            if services.isEmpty {
-                Text("No services discovered or still discovering...")
+        VStack(spacing: 16) {
+            HStack {
+                Circle()
+                    .fill(nmeaReader.isConnected ? Color.green : Color.red)
+                    .frame(width: 12, height: 12)
+                Text(nmeaReader.isConnected ? "Emlid Connected" : "Emlid Disconnected")
+                    .foregroundColor(.secondary)
+                    .font(.subheadline)
+                Spacer()
+                Text("Last data: \(nmeaReader.secondsSinceLastData) s ago")
+                    .font(.caption)
                     .foregroundColor(.gray)
-            } else {
-                List(services, id: \.uuid) { service in
-                    Text(service.uuid.uuidString)
+            }
+            Button(nmeaReader.isConnected ? "Disconnect to Reach RX" : "Connect to Reach RX") {
+                if nmeaReader.isConnected {
+                    nmeaReader.disconnect()
+                } else {
+                    nmeaReader.connectToReachRX()
                 }
+            }
+            if let lat = nmeaReader.parsed.latitude, let lon = nmeaReader.parsed.longitude {
+                Text("Latitude: \(lat)")
+                Text("Longitude: \(lon)")
+            }
+            if let alt = nmeaReader.parsed.altitude {
+                Text("Altitude: \(alt) m")
+            }
+            if let fix = nmeaReader.parsed.fixQuality {
+                Text("Fix Quality: \(fix)")
+            }
+            if let sats = nmeaReader.parsed.satellites {
+                Text("Satellites: \(sats)")
+            }
+            if let hdop = nmeaReader.parsed.hdop {
+                Text("HDOP: \(hdop)")
+            }
+            if let hacc = nmeaReader.parsed.horizontalAccuracy {
+                Text("Horizontal Accuracy: \(hacc) m")
+            }
+            if let vacc = nmeaReader.parsed.verticalAccuracy {
+                Text("Vertical Accuracy: \(vacc) m")
+            }
+            Divider()
+            Text("Raw NMEA (last 10 lines):")
+                .font(.headline)
+            List(nmeaReader.nmeaLines.suffix(10), id: \.self) { line in
+                Text(line)
+                    .font(.system(.body, design: .monospaced))
             }
         }
         .padding()
