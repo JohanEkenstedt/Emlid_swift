@@ -5,3 +5,4 @@ To make it work you need to.
 2. Connect to the RX device in that app
 3. Open settings and choose Bluetooth and connect to the RX-unit (There is two devices called RC, one should alreade be connected).
 4. Run the Emlid_Swift app and connect to the Emlid device
+![image](https://github.com/user-attachments/assets/22d26eb1-2979-4d64-ace2-7555e6d0d7f9)
